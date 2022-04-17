@@ -1,12 +1,22 @@
 CREATE TYPE EARN_KEY AS STRUCT<CUSTOMER_ID INT, CAMPAIGN_ID INT, TERM STRING>;
 
-CREATE TABLE customer {
-    customer_id INT PRIMARY KEY,
-    is_employee BOOLEAN,
-    business_line STRING,
-    customer_since TIMESTAMP,
-    onboarding_channel STRING
-}
+CREATE TABLE customer 
+     (
+        customer_id INT PRIMARY KEY,
+        is_employee BOOLEAN,
+        business_line STRING,
+        customer_since TIMESTAMP,
+        onboarding_channel STRING
+    )
+    WITH (
+        KAFKA_TOPIC='customer',
+        PARTITIONS='4',
+        KEY_FORMAT='JSON',
+        VALUE_FORMAT='JSON'
+    );
+
+INSERT INTO customer VALUES(1,false,'X','2022-03-07T21:12:53','EKYC');
+INSERT INTO customer VALUES(2,true,'S','2022-03-07T21:12:53','EKYC');
 
 CREATE STREAM debit_card_transactions (
     txnid INT KEY,
@@ -28,6 +38,7 @@ INSERT INTO debit_card_transactions VALUES(7,1,20.00,1,'2022-04-07 21:12:53');
 INSERT INTO debit_card_transactions VALUES(23,1,10.00,1,'2022-04-09 11:53:43');
 INSERT INTO debit_card_transactions VALUES(39,1,80.00,1,'2022-04-11 17:53:43');
 INSERT INTO debit_card_transactions VALUES(121,1,80.00,1,'2022-04-18 19:25:08');
+INSERT INTO debit_card_transactions VALUES(3,2,10.00,1,'2022-04-01 12:23:14');
 
 
 
@@ -39,11 +50,15 @@ CREATE TABLE cashback_earned
         VALUE_FORMAT='JSON'
     )   
     AS SELECT 
-    STRUCT(customer_id := customer_id,campaign_id := 1, term := SUBSTRING(transaction_time,1,7)) AS earn_id,
-    CAST(LEAST(sum(amount)/2,50.00) AS DECIMAL(12,2) AS amount
-    FROM debit_card_transactions
-    WHERE merchant_id = 1
-    GROUP BY STRUCT(customer_id := customer_id,campaign_id := 1, term := SUBSTRING(transaction_time,1,7)) EMIT CHANGES;
+    STRUCT(customer_id := d.customer_id,campaign_id := 1, term := SUBSTRING(d.transaction_time,1,7)) AS earn_id,
+    CAST(LEAST(sum(d.amount)/2,50.00) AS DECIMAL(12,2)) AS amount
+    FROM debit_card_transactions d
+    JOIN customer c on d.customer_id = c.customer_id
+    WHERE d.merchant_id = 1 
+          AND c.is_employee = FALSE
+          AND c.onboarding_channel = 'EKYC'
+          AND c.customer_since between '2022-03-01T00:00:00' AND '2022-03-31T23:59:59'
+    GROUP BY STRUCT(customer_id := d.customer_id,campaign_id := 1, term := SUBSTRING(d.transaction_time,1,7)) EMIT CHANGES;
 
 CREATE STREAM cashback_order (
         earn_id EARN_KEY KEY,
@@ -73,15 +88,15 @@ CREATE STREAM earned_order_diff_stream (earn_id EARN_KEY KEY,amount DECIMAL(12,2
 WITH (
     KAFKA_TOPIC = 'earned_order_diff',
     KEY_FORMAT = 'JSON',
-    VALUE_FORMAT = 'JSON'
+    VALUE_FORMAT = 'JSON',
+    PARTITIONS = 4
     );
 
 CREATE TABLE earned_order_diff 
 WITH (
     KAFKA_TOPIC = 'earned_order_diff',
     KEY_FORMAT = 'JSON',
-    VALUE_FORMAT = 'JSON',
-    PARTITIONS = 4
+    VALUE_FORMAT = 'JSON'
     )
 AS
     SELECT 
