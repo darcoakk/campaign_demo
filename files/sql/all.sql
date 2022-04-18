@@ -42,9 +42,9 @@ INSERT INTO debit_card_transactions VALUES(3,2,10.00,1,'2022-04-01 12:23:14');
 
 
 
-CREATE TABLE cashback_earned 
+CREATE TABLE cashback_earned_cid_1 
     WITH (
-        KAFKA_TOPIC='cashback_earned',
+        KAFKA_TOPIC='cashback_earned_cid_1',
         PARTITIONS='4',
         KEY_FORMAT='JSON',
         VALUE_FORMAT='JSON'
@@ -59,6 +59,23 @@ CREATE TABLE cashback_earned
           AND c.onboarding_channel = 'EKYC'
           AND c.customer_since between '2022-03-01T00:00:00' AND '2022-03-31T23:59:59'
     GROUP BY STRUCT(customer_id := d.customer_id,campaign_id := 1, term := SUBSTRING(d.transaction_time,1,7)) EMIT CHANGES;
+
+CREATE TABLE cashback_earned_cid_2 
+    WITH (
+        KAFKA_TOPIC='cashback_earned_cid_2',
+        PARTITIONS='4',
+        KEY_FORMAT='JSON',
+        VALUE_FORMAT='JSON'
+    )   
+    AS SELECT 
+    STRUCT(customer_id := d.customer_id,campaign_id := 2, term := SUBSTRING(d.transaction_time,1,7)) AS earn_id,
+    CAST(LEAST(sum(d.amount)/2,50.00) AS DECIMAL(12,2)) AS amount
+    FROM debit_card_transactions d
+    JOIN customer c on d.customer_id = c.customer_id
+    WHERE d.merchant_id = 3 
+          AND c.onboarding_channel = 'EKYC'
+          AND c.customer_since between '2022-03-01T00:00:00' AND '2022-03-31T23:59:59'
+    GROUP BY STRUCT(customer_id := d.customer_id,campaign_id := 2, term := SUBSTRING(d.transaction_time,1,7)) EMIT CHANGES;
 
 CREATE STREAM cashback_order (
         earn_id EARN_KEY KEY,
@@ -92,9 +109,18 @@ WITH (
     PARTITIONS = 4
     );
 
-CREATE TABLE earned_order_diff 
+CREATE STREAM earned_order_diff_cid_1_stream (earn_id EARN_KEY KEY,amount DECIMAL(12,2))
 WITH (
-    KAFKA_TOPIC = 'earned_order_diff',
+    KAFKA_TOPIC = 'earned_order_diff_cid_1',
+    KEY_FORMAT = 'JSON',
+    VALUE_FORMAT = 'JSON',
+    PARTITIONS = 4
+    );
+
+
+CREATE TABLE earned_order_diff_cid_1 
+WITH (
+    KAFKA_TOPIC = 'earned_order_diff_cid_1',
     KEY_FORMAT = 'JSON',
     VALUE_FORMAT = 'JSON'
     )
@@ -102,8 +128,32 @@ AS
     SELECT 
         c.earn_id,
         CAST(c.amount - IFNULL(t.total_amount,CAST(0.00 AS DECIMAL(12,2))) AS DECIMAL(12,2)) as amount 
-    FROM cashback_earned c 
+    FROM cashback_earned_cid_1 c 
     LEFT JOIN   total_cashback_order t  on c.earn_id = t.earn_id
     EMIT CHANGES;
 
-INSERT INTO cashback_order select * from earned_order_diff_stream where abs(amount) > 0.1 emit changes;
+INSERT INTO cashback_order select * from earned_order_diff_cid_1_stream where abs(amount) > 0.1 emit changes;
+
+CREATE TABLE earned_order_diff_cid_2 
+WITH (
+    KAFKA_TOPIC = 'earned_order_diff_cid_2',
+    KEY_FORMAT = 'JSON',
+    VALUE_FORMAT = 'JSON'
+    )
+AS
+    SELECT 
+        c.earn_id,
+        CAST(c.amount - IFNULL(t.total_amount,CAST(0.00 AS DECIMAL(12,2))) AS DECIMAL(12,2)) as amount 
+    FROM cashback_earned_cid_2 c 
+    LEFT JOIN   total_cashback_order t  on c.earn_id = t.earn_id
+    EMIT CHANGES;
+
+CREATE STREAM earned_order_diff_cid_2_stream (earn_id EARN_KEY KEY,amount DECIMAL(12,2))
+WITH (
+    KAFKA_TOPIC = 'earned_order_diff_cid_2',
+    KEY_FORMAT = 'JSON',
+    VALUE_FORMAT = 'JSON',
+    PARTITIONS = 4
+    );
+    
+INSERT INTO cashback_order select * from earned_order_diff_cid_2_stream where abs(amount) > 0.1 emit changes;
