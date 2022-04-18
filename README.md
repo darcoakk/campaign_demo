@@ -1,7 +1,7 @@
 # Campaign Demo
 
 ```mermaid
-graph LR;
+graph TB;
     join1[/Create Table<br>By Stream Table Join/]
     summarize1[/Create Table<br>Group By Customer,Campaign & Term/]
     join2[/Create Table<br>By Table Table Join/]
